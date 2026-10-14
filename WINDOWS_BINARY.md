@@ -1,8 +1,7 @@
 # Standalone Windows EXE for MCP for Blender
 
 This fork packages the Python MCP server into a **single Windows console executable**
-`mcp-for-blender.exe` with PyInstaller. The executable includes the Blender
-addon, built-in guides, an AI-agent skill and a self-installer. No Python, uv,
+`mcp-for-blender.exe` with PyInstaller. **The downloadable workflow artifact contains only\n`mcp-for-blender.exe`, with no required sidecar files.** The executable embeds\nthe Blender addon, the full Python MCP server and dependencies, built-in guides,\nviewport UI HTML, an AI-agent skill, the agent installer, documentation and license. No Python, uv,
 Node.js or agent CLI is required on the end-user machine. **Blender itself must
 still be installed.** Node.js 24 is used by CI to verify the MCP protocol.
 
@@ -10,7 +9,7 @@ still be installed.** Node.js 24 is used by CI to verify the MCP protocol.
 
 On GitHub, choose **Actions → Build Windows standalone EXE (Node.js 24) → Run
 workflow**. Download/extract the `mcp-for-blender-windows-exe` artifact from a
-successful run. Move the executable into a **permanent directory** before
+successful run. Extract the ZIP (GitHub Actions always downloads artifacts as\na ZIP); inside it is **one file: `mcp-for-blender.exe`**. Move the EXE into a\n**permanent directory** before
 registering it: MCP client configurations point to its absolute path.
 
 In PowerShell from the directory containing the EXE:
@@ -36,7 +35,7 @@ MCP stdio server. It does not require installed Codex/Claude/OpenCode CLIs.
 It merges existing config files and agent instructions, creates backup
 `.bak` files for changed existing files, refuses malformed JSON or TOML,
 and preserves pre-existing `blender` MCP entries unless `--replace` is provided.
-Installing again is idempotent.
+Installing again is idempotent. The Blender addon and skills are installed\n**from the EXE itself**, not downloaded separately.
 
 ## Configuration locations
 
@@ -55,7 +54,7 @@ developer-agent instructions. The `chatgpt` alias targets Codex.
 
 ## Blender addon and first run
 
-Install the Blender addon explicitly:
+Install the Blender addon directly from the same executable (no `addon.py`\nsidecar or network download is needed):
 
 ```powershell
 .\mcp-for-blender.exe install-addon
