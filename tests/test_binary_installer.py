@@ -1,4 +1,6 @@
 """Standalone installer regression tests (no AI client binaries required)."""
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -7,7 +9,7 @@ import tomllib
 import unittest
 from unittest.mock import patch
 
-from blender_mcp import installer, bundle_cli
+from blender_mcp import installer, bundle_cli, cli_help
 
 
 class InstallerTests(unittest.TestCase):
@@ -23,6 +25,68 @@ class InstallerTests(unittest.TestCase):
         with patch.dict(os.environ, {"CODEX_HOME": ""}):
             return installer.install(targets or list(installer.ALL_CLIENTS),
                                      self.exe, self.home, self.skill, **kwargs)
+
+
+    def test_help_commands_expose_all_install_targets(self):
+        root = cli_help.build_parser().format_help()
+        for entry in ("install", "agents", "bundle", "install-addon", "setup", "update"):
+            self.assertIn(entry, root)
+        for name in cli_help.CLIENT_HELP:
+            text = io.StringIO()
+            with contextlib.redirect_stdout(text):
+                with self.assertRaises(SystemExit) as exit_status:
+                    cli_help.print_help_for(["install", name, "--help"])
+            self.assertEqual(exit_status.exception.code, 0, name)
+            self.assertIn(name, text.getvalue())
+            self.assertIn("--dry-run", text.getvalue())
+            self.assertIn("--replace", text.getvalue())
+
+    def test_help_recurses_through_nested_command_tree(self):
+        for args in (["--help"], ["install", "--help"], ["agents", "--help"],
+                     ["agents", "install", "--help"], ["bundle", "--help"],
+                     ["bundle", "verify", "--help"], ["bundle", "license", "--help"],
+                     ["bundle", "docs", "--help"], ["install-addon", "--help"],
+                     ["addon-paths", "--help"], ["setup", "--help"],
+                     ["update", "--help"]):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                with self.assertRaises(SystemExit) as exit_status:
+                    cli_help.print_help_for(args)
+            self.assertEqual(exit_status.exception.code, 0, str(args))
+            self.assertIn("usage:", output.getvalue().lower(), str(args))
+        listing = io.StringIO()
+        with contextlib.redirect_stdout(listing):
+            with self.assertRaises(SystemExit):
+                cli_help.print_help_for(["install", "--help"])
+        for name in ("codex", "claude", "antigravity", "opencode", "--all"):
+            self.assertIn(name, listing.getvalue())
+
+    def test_agents_target_arguments(self):
+        self.assertEqual(cli_help.agent_install_arguments(
+            ["install", "--target", "codex", "--dry-run", "--replace"]),
+            ["codex", "--dry-run", "--replace"])
+        self.assertEqual(cli_help.agent_install_arguments(["install", "--target", "all"]), ["--all"])
+
+    def test_install_only_selected_agent(self):
+        for client, expected in (
+            ("codex", ".codex/config.toml"),
+            ("claude", ".claude.json"),
+            ("antigravity", ".gemini/config/mcp_config.json"),
+            ("opencode", ".config/opencode/opencode.json"),
+        ):
+            with tempfile.TemporaryDirectory() as temporary:
+                home = Path(temporary)
+                self.assertEqual(installer.install([client], self.exe, home, self.skill), 0)
+                self.assertTrue((home / expected).is_file(), client)
+                self.assertTrue((home / ".agents/skills/blender-scene-automation/SKILL.md").is_file())
+                others = {
+                    ".codex/config.toml",
+                    ".claude.json",
+                    ".gemini/config/mcp_config.json",
+                    ".config/opencode/opencode.json",
+                } - {expected}
+                for path in others:
+                    self.assertFalse((home / path).exists(), f"{client} unexpectedly wrote {path}")
 
     def test_bundle_manifest_from_source(self):
         contents = bundle_cli.report()
