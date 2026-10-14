@@ -54,37 +54,96 @@ jobs:
             --collect-submodules httpx `
             --recursive-copy-metadata mcp `
             --copy-metadata mcp-for-blender `
+            --add-data "LICENSE;." `
+            --add-data "WINDOWS_BINARY.md;." `
             main.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Exercise frozen installer in temporary home
+      - name: Assert single EXE distribution and relocate without sidecars
         shell: pwsh
         run: |
-          $homeDir = Join-Path $env:RUNNER_TEMP "blender-mcp-test-home"
-          & dist/mcp-for-blender.exe install --all --dry-run --home $homeDir
+          $ErrorActionPreference = 'Stop'
+          $distFiles = @(Get-ChildItem -LiteralPath dist -File)
+          if ($distFiles.Count -ne 1 -or $distFiles[0].Name -ne 'mcp-for-blender.exe') {
+            throw "Expected ONLY dist/mcp-for-blender.exe, found: $($distFiles.Name -join ', ')"
+          }
+          $relocatedDir = Join-Path $env:RUNNER_TEMP 'standalone-blender-mcp'
+          New-Item -ItemType Directory -Force -Path $relocatedDir | Out-Null
+          Copy-Item -LiteralPath dist/mcp-for-blender.exe -Destination $relocatedDir
+          $binary = Join-Path $relocatedDir 'mcp-for-blender.exe'
+          "BLENDER_BINARY=$binary" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Verify all assets embedded in relocated EXE
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location $env:RUNNER_TEMP
+          try {
+            $json = & $env:BLENDER_BINARY bundle verify --json
+            if ($LASTEXITCODE -ne 0) { throw 'Bundle verification returned failure' }
+            $report = ($json -join [Environment]::NewLine) | ConvertFrom-Json
+            if ($report.status -ne 'ok' -or -not $report.onefile_runtime) {
+              throw "Resources missing or EXE not frozen: $($json -join ' ')"
+            }
+            foreach ($asset in $report.assets.PSObject.Properties) {
+              if ($asset.Value -le 100) { throw "Bundled resource incomplete: $($asset.Name)" }
+            }
+            Write-Host "PASS: $($report.assets.PSObject.Properties.Count) bundled resources checked"
+            $license = & $env:BLENDER_BINARY bundle license
+            if ($LASTEXITCODE -ne 0 -or -not (($license -join ' ') -match 'MIT License')) {
+              throw 'Embedded license could not be read'
+            }
+            $docs = & $env:BLENDER_BINARY bundle docs
+            if ($LASTEXITCODE -ne 0 -or -not (($docs -join ' ') -match 'Standalone Windows EXE')) {
+              throw 'Embedded documentation could not be read'
+            }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Install add-on from embedded bytes, without external addon.py
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $addonsDir = Join-Path $env:RUNNER_TEMP 'unconfigured-blender/addons'
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & $env:BLENDER_BINARY install-addon --addons-dir $addonsDir
+            if ($LASTEXITCODE -ne 0) { throw 'Bundled Blender addon installation failed' }
+          } finally {
+            Pop-Location
+          }
+          $actual = Join-Path $addonsDir 'blender_mcp.py'
+          if (-not (Test-Path $actual)) { throw 'Missing installed addon' }
+          $sourceHash = (Get-FileHash src/blender_mcp/bundled/addon.py -Algorithm SHA256).Hash
+          $actualHash = (Get-FileHash $actual -Algorithm SHA256).Hash
+          if ($sourceHash -ne $actualHash) { throw 'Embedded addon differs from repository addon.py' }
+
+      - name: Exercise frozen installer in isolated user home
+        shell: pwsh
+        run: |
+          $homeDir = Join-Path $env:RUNNER_TEMP 'blender-mcp-test-home'
+          & $env:BLENDER_BINARY install --all --dry-run --home $homeDir
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (Test-Path $homeDir) { throw "Dry-run changed filesystem" }
-          & dist/mcp-for-blender.exe install --all --home $homeDir
+          if (Test-Path $homeDir) { throw 'Dry-run changed filesystem' }
+          & $env:BLENDER_BINARY install --all --home $homeDir
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & dist/mcp-for-blender.exe install --all --home $homeDir
+          & $env:BLENDER_BINARY install --all --home $homeDir
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/verify-installed-agents.py $homeDir (Resolve-Path dist/mcp-for-blender.exe).Path
+          python scripts/verify-installed-agents.py $homeDir $env:BLENDER_BINARY
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify MCP initialization and tools/list using Node.js 24
+
+      - name: Verify MCP initialize and tools/list on relocated EXE (Node.js 24)
         shell: pwsh
         run: |
           node --version
-          node scripts/verify-windows-exe.mjs dist/mcp-for-blender.exe
+          node scripts/verify-windows-exe.mjs $env:BLENDER_BINARY
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Add licenses and checksum
+
+      - name: Report binary checksum
         shell: pwsh
         run: |
-          Copy-Item WINDOWS_BINARY.md dist/WINDOWS_BINARY.md
-          Copy-Item LICENSE dist/LICENSE
-          Copy-Item src/blender_mcp/skills/blender-scene-automation/SKILL.md dist/SKILL.md
-          python -m pip freeze | Out-File -Encoding utf8 dist/build-requirements.txt
-          Get-FileHash dist/mcp-for-blender.exe -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash.ToLower())  mcp-for-blender.exe" } |
-            Set-Content -Encoding ascii dist/SHA256SUMS.txt
+          Get-FileHash dist/mcp-for-blender.exe -Algorithm SHA256 | Format-List
+
       - name: Upload packaging diagnostics if a step fails
         if: failure()
         uses: actions/upload-artifact@v6
@@ -99,7 +158,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: mcp-for-blender-windows-exe
-          path: dist/*
+          path: dist/mcp-for-blender.exe
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
