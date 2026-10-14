@@ -3,6 +3,9 @@ import sys
 
 def main():
     args = sys.argv[1:]
+    if args and args[0] == "bundle":
+        from blender_mcp.bundle_cli import main as bundle_main
+        return bundle_main(args[1:])
     if args and args[0] == "install":
         from blender_mcp.installer import main as install_main
         return install_main(args[1:])
