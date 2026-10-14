@@ -132,6 +132,12 @@ jobs:
           python scripts/verify-installed-agents.py $homeDir $env:BLENDER_BINARY
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Test every EXE --help and independent per-agent installation
+        shell: pwsh
+        run: |
+          python scripts/verify-cli-help.py $env:BLENDER_BINARY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify MCP initialize and tools/list on relocated EXE (Node.js 24)
         shell: pwsh
         run: |
