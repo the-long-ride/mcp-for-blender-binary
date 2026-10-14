@@ -1,0 +1,104 @@
+name: Build Windows standalone EXE (Node.js 24)
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-exe.yml"
+      - "main.py"
+      - "pyproject.toml"
+      - "src/**"
+      - "scripts/**"
+      - "tests/test_binary_installer.py"
+      - "WINDOWS_BINARY.md"
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Node.js 24 for MCP protocol validation
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Python 3.11 for packaged MCP server
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install MCP and PyInstaller
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install -e . "pyinstaller>=6.16,<7"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test agent installer
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p test_binary_installer.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package stdio console executable
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --console --noupx --name mcp-for-blender `
+            --paths src `
+            --collect-all blender_mcp `
+            --collect-all mcp `
+            --collect-submodules httpx `
+            --recursive-copy-metadata mcp `
+            --copy-metadata mcp-for-blender `
+            main.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Exercise frozen installer in temporary home
+        shell: pwsh
+        run: |
+          $homeDir = Join-Path $env:RUNNER_TEMP "blender-mcp-test-home"
+          & dist/mcp-for-blender.exe install --all --dry-run --home $homeDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path $homeDir) { throw "Dry-run changed filesystem" }
+          & dist/mcp-for-blender.exe install --all --home $homeDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & dist/mcp-for-blender.exe install --all --home $homeDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/verify-installed-agents.py $homeDir (Resolve-Path dist/mcp-for-blender.exe).Path
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify MCP initialization and tools/list using Node.js 24
+        shell: pwsh
+        run: |
+          node --version
+          node scripts/verify-windows-exe.mjs dist/mcp-for-blender.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Add licenses and checksum
+        shell: pwsh
+        run: |
+          Copy-Item WINDOWS_BINARY.md dist/WINDOWS_BINARY.md
+          Copy-Item LICENSE dist/LICENSE
+          Copy-Item src/blender_mcp/skills/blender-scene-automation/SKILL.md dist/SKILL.md
+          python -m pip freeze | Out-File -Encoding utf8 dist/build-requirements.txt
+          Get-FileHash dist/mcp-for-blender.exe -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  mcp-for-blender.exe" } |
+            Set-Content -Encoding ascii dist/SHA256SUMS.txt
+      - name: Upload packaging diagnostics if a step fails
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: blender-mcp-build-diagnostics
+          path: |
+            build/mcp-for-blender/warn-mcp-for-blender.txt
+            build/mcp-for-blender/xref-mcp-for-blender.html
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload Windows binary
+        uses: actions/upload-artifact@v6
+        with:
+          name: mcp-for-blender-windows-exe
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
