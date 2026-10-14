@@ -1,0 +1,170 @@
+name: Build Windows standalone EXE (Node.js 24)
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-exe.yml"
+      - "main.py"
+      - "pyproject.toml"
+      - "src/**"
+      - "scripts/**"
+      - "tests/test_binary_installer.py"
+      - "WINDOWS_BINARY.md"
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Node.js 24 for MCP protocol validation
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Python 3.11 for packaged MCP server
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install MCP and PyInstaller
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install -e . "pyinstaller>=6.16,<7"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test agent installer
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p test_binary_installer.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package stdio console executable
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --console --noupx --name mcp-for-blender `
+            --paths src `
+            --collect-all blender_mcp `
+            --collect-submodules mcp.server.fastmcp `
+            --collect-data mcp `
+            --collect-submodules httpx `
+            --recursive-copy-metadata mcp `
+            --copy-metadata mcp-for-blender `
+            --add-data "LICENSE;." `
+            --add-data "WINDOWS_BINARY.md;." `
+            main.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Assert single EXE distribution and relocate without sidecars
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $distFiles = @(Get-ChildItem -LiteralPath dist -File)
+          if ($distFiles.Count -ne 1 -or $distFiles[0].Name -ne 'mcp-for-blender.exe') {
+            throw "Expected ONLY dist/mcp-for-blender.exe, found: $($distFiles.Name -join ', ')"
+          }
+          $relocatedDir = Join-Path $env:RUNNER_TEMP 'standalone-blender-mcp'
+          New-Item -ItemType Directory -Force -Path $relocatedDir | Out-Null
+          Copy-Item -LiteralPath dist/mcp-for-blender.exe -Destination $relocatedDir
+          $binary = Join-Path $relocatedDir 'mcp-for-blender.exe'
+          "BLENDER_BINARY=$binary" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Verify all assets embedded in relocated EXE
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location $env:RUNNER_TEMP
+          try {
+            $json = & $env:BLENDER_BINARY bundle verify --json
+            if ($LASTEXITCODE -ne 0) { throw 'Bundle verification returned failure' }
+            $report = ($json -join [Environment]::NewLine) | ConvertFrom-Json
+            if ($report.status -ne 'ok' -or -not $report.onefile_runtime) {
+              throw "Resources missing or EXE not frozen: $($json -join ' ')"
+            }
+            foreach ($asset in $report.assets.PSObject.Properties) {
+              if ($asset.Value -le 100) { throw "Bundled resource incomplete: $($asset.Name)" }
+            }
+            Write-Host "PASS: $($report.assets.PSObject.Properties.Count) bundled resources checked"
+            $license = & $env:BLENDER_BINARY bundle license
+            if ($LASTEXITCODE -ne 0 -or -not (($license -join ' ') -match 'MIT License')) {
+              throw 'Embedded license could not be read'
+            }
+            $docs = & $env:BLENDER_BINARY bundle docs
+            if ($LASTEXITCODE -ne 0 -or -not (($docs -join ' ') -match 'Standalone Windows EXE')) {
+              throw 'Embedded documentation could not be read'
+            }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Install add-on from embedded bytes, without external addon.py
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $addonsDir = Join-Path $env:RUNNER_TEMP 'unconfigured-blender/addons'
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & $env:BLENDER_BINARY install-addon --addons-dir $addonsDir
+            if ($LASTEXITCODE -ne 0) { throw 'Bundled Blender addon installation failed' }
+          } finally {
+            Pop-Location
+          }
+          $actual = Join-Path $addonsDir 'blender_mcp.py'
+          if (-not (Test-Path $actual)) { throw 'Missing installed addon' }
+          $sourceHash = (Get-FileHash src/blender_mcp/bundled/addon.py -Algorithm SHA256).Hash
+          $actualHash = (Get-FileHash $actual -Algorithm SHA256).Hash
+          if ($sourceHash -ne $actualHash) { throw 'Embedded addon differs from repository addon.py' }
+
+      - name: Exercise frozen installer in isolated user home
+        shell: pwsh
+        run: |
+          $homeDir = Join-Path $env:RUNNER_TEMP 'blender-mcp-test-home'
+          & $env:BLENDER_BINARY install --all --dry-run --home $homeDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path $homeDir) { throw 'Dry-run changed filesystem' }
+          & $env:BLENDER_BINARY install --all --home $homeDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $env:BLENDER_BINARY install --all --home $homeDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/verify-installed-agents.py $homeDir $env:BLENDER_BINARY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test every EXE --help and independent per-agent installation
+        shell: pwsh
+        run: |
+          python scripts/verify-cli-help.py $env:BLENDER_BINARY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify MCP initialize and tools/list on relocated EXE (Node.js 24)
+        shell: pwsh
+        run: |
+          node --version
+          node scripts/verify-windows-exe.mjs $env:BLENDER_BINARY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Report binary checksum
+        shell: pwsh
+        run: |
+          Get-FileHash dist/mcp-for-blender.exe -Algorithm SHA256 | Format-List
+
+      - name: Upload packaging diagnostics if a step fails
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: blender-mcp-build-diagnostics
+          path: |
+            build/mcp-for-blender/warn-mcp-for-blender.txt
+            build/mcp-for-blender/xref-mcp-for-blender.html
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload Windows binary
+        uses: actions/upload-artifact@v6
+        with:
+          name: mcp-for-blender-windows-exe
+          path: dist/mcp-for-blender.exe
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
