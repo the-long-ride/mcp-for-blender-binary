@@ -49,7 +49,8 @@ jobs:
           python -m PyInstaller --noconfirm --clean --onefile --console --noupx --name mcp-for-blender `
             --paths src `
             --collect-all blender_mcp `
-            --collect-all mcp `
+            --collect-submodules mcp.server.fastmcp `
+            --collect-data mcp `
             --collect-submodules httpx `
             --recursive-copy-metadata mcp `
             --copy-metadata mcp-for-blender `
