@@ -7,7 +7,7 @@ import tomllib
 import unittest
 from unittest.mock import patch
 
-from blender_mcp import installer
+from blender_mcp import installer, bundle_cli
 
 
 class InstallerTests(unittest.TestCase):
@@ -23,6 +23,13 @@ class InstallerTests(unittest.TestCase):
         with patch.dict(os.environ, {"CODEX_HOME": ""}):
             return installer.install(targets or list(installer.ALL_CLIENTS),
                                      self.exe, self.home, self.skill, **kwargs)
+
+    def test_bundle_manifest_from_source(self):
+        contents = bundle_cli.report()
+        self.assertEqual(contents["status"], "ok")
+        self.assertFalse(contents["onefile_runtime"])
+        for item in ("addon", "skill", "viewport", "license", "documentation"):
+            self.assertGreater(contents["assets"][item], 100)
 
     def test_embedded_skill_resource(self):
         self.assertIn("name: blender-scene-automation", self.skill)
