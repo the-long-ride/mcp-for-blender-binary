@@ -115,7 +115,7 @@ def _write_json_server(
 
 def _install_codex(exe: Path, home: Path, dry_run: bool, replace: bool) -> None:
     # Shared by Codex CLI, IDE extension, and ChatGPT desktop Codex host.
-    codex_home = Path(os.environ["CODEX_HOME"]).expanduser() if os.getenv("CODEX_HOME") else home / ".codex"
+    codex_home = (Path(os.environ["CODEX_HOME"]).expanduser() if os.getenv("CODEX_HOME") and home == Path.home() else home / ".codex")
     path = codex_home / "config.toml"
     original = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
     try:
@@ -216,7 +216,7 @@ def _install_opencode(exe: Path, home: Path, dry_run: bool, replace: bool) -> No
 RULE_START = "<!-- mcp-for-blender managed start -->"
 RULE_END = "<!-- mcp-for-blender managed end -->"
 RULE_TEXT = """When the task involves Blender 3D modeling or scene editing, use the
-\`blender\` MCP server and the \`blender-scene-automation\` skill installed in
+`blender` MCP server and the `blender-scene-automation` skill installed in
 ~/.agents/skills/blender-scene-automation/SKILL.md. Start by inspecting the addon
 and scene; confirm results through viewport inspection. Treat execute_blender_code
 as arbitrary Python execution in the user's Blender: ask before destructive,
