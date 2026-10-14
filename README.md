@@ -1,5 +1,7 @@
 <div align="center">
 
+> **Windows EXE build:** This fork can package a standalone `mcp-for-blender.exe` with a four-agent skill/MCP installer. See [Windows binary instructions](WINDOWS_BINARY.md).
+
 # MCP for Blender
 
 **Connect Blender to any LLM**
