@@ -309,13 +309,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--all", action="store_true", help="Configure all supported client families")
     parser.add_argument("--dry-run", action="store_true", help="Preview without changing files")
     parser.add_argument("--replace", action="store_true", help="Replace existing blender entries")
+    parser.add_argument("--home", type=Path, default=None, help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
     if bool(options.client) == bool(options.all):
         parser.error("specify a client or --all")
     try:
         return install(
             list(ALL_CLIENTS) if options.all else [options.client],
-            executable_path(), Path.home(), embedded_skill(),
+            executable_path(), (options.home.expanduser() if options.home else Path.home()), embedded_skill(),
             options.dry_run, options.replace,
         )
     except (RuntimeError, OSError) as exc:
